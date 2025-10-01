@@ -1,10 +1,12 @@
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 from pydantic import BaseModel
-from typing import List, Optional
+from typing import List, Optional, Dict
 import os
+import json
+import asyncio
 from dotenv import load_dotenv
 
 # Load environment variables
@@ -13,7 +15,7 @@ load_dotenv()
 # Database configuration
 DATABASE_URL = os.getenv(
     "DATABASE_URL", 
-    "postgresql://postgres:123456@localhost:5432/postgres"
+    "postgresql://postgres:YourSecurePassword123!@blood-donor-db.cfu6ig0486fv.eu-west-3.rds.amazonaws.com:5432/postgres"
 )
 
 # Create FastAPI app
@@ -35,6 +37,53 @@ app.add_middleware(
 # Database setup
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+
+# WebSocket connection manager
+class ConnectionManager:
+    def __init__(self):
+        self.active_connections: List[WebSocket] = []
+        self.blood_type_subscriptions: Dict[str, List[WebSocket]] = {}
+
+    async def connect(self, websocket: WebSocket):
+        await websocket.accept()
+        self.active_connections.append(websocket)
+
+    def disconnect(self, websocket: WebSocket):
+        if websocket in self.active_connections:
+            self.active_connections.remove(websocket)
+        # Remove from blood type subscriptions
+        for blood_type, connections in self.blood_type_subscriptions.items():
+            if websocket in connections:
+                connections.remove(websocket)
+
+    async def subscribe_to_blood_type(self, websocket: WebSocket, blood_type: str):
+        if blood_type not in self.blood_type_subscriptions:
+            self.blood_type_subscriptions[blood_type] = []
+        if websocket not in self.blood_type_subscriptions[blood_type]:
+            self.blood_type_subscriptions[blood_type].append(websocket)
+
+    async def send_personal_message(self, message: str, websocket: WebSocket):
+        try:
+            await websocket.send_text(message)
+        except:
+            self.disconnect(websocket)
+
+    async def broadcast_to_blood_type(self, blood_type: str, message: str):
+        if blood_type in self.blood_type_subscriptions:
+            for connection in self.blood_type_subscriptions[blood_type].copy():
+                try:
+                    await connection.send_text(message)
+                except:
+                    self.disconnect(connection)
+
+    async def broadcast_to_all(self, message: str):
+        for connection in self.active_connections.copy():
+            try:
+                await connection.send_text(message)
+            except:
+                self.disconnect(connection)
+
+manager = ConnectionManager()
 
 # Initialize database schema
 def init_database():
@@ -151,6 +200,37 @@ async def health_check():
     except Exception as e:
         return {"status": "healthy", "database": "disconnected", "error": str(e)}
 
+@app.websocket("/ws")
+async def websocket_endpoint(websocket: WebSocket):
+    await manager.connect(websocket)
+    try:
+        while True:
+            # Receive message from client
+            data = await websocket.receive_text()
+            message = json.loads(data)
+            
+            if message.get("type") == "subscribe_blood_type":
+                blood_type = message.get("blood_type")
+                if blood_type:
+                    await manager.subscribe_to_blood_type(websocket, blood_type)
+                    await manager.send_personal_message(
+                        json.dumps({
+                            "type": "subscribed",
+                            "blood_type": blood_type,
+                            "message": f"Subscribed to {blood_type} blood requests"
+                        }), 
+                        websocket
+                    )
+            
+            elif message.get("type") == "ping":
+                await manager.send_personal_message(
+                    json.dumps({"type": "pong"}), 
+                    websocket
+                )
+                
+    except WebSocketDisconnect:
+        manager.disconnect(websocket)
+
 @app.post("/api/v1/donors", response_model=DonorResponse)
 async def create_donor(donor: DonorCreate, db = Depends(get_db)):
     """Create a new blood donor"""
@@ -185,6 +265,22 @@ async def create_donor(donor: DonorCreate, db = Depends(get_db)):
         
         # Commit the transaction
         db.commit()
+        
+        # Broadcast new donor to subscribers
+        new_donor_message = json.dumps({
+            "type": "new_donor",
+            "donor": {
+                "id": str(donor_id),
+                "first_name": donor.first_name,
+                "blood_type": donor.blood_type,
+                "city": donor.city,
+                "is_verified": donor.is_verified,
+                "created_at": created_at.isoformat()
+            }
+        })
+        
+        # Broadcast to all subscribers of this blood type
+        await manager.broadcast_to_blood_type(donor.blood_type, new_donor_message)
         
         return DonorResponse(
             id=str(donor_id),
