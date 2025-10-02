@@ -15,7 +15,7 @@ load_dotenv()
 # Database configuration
 DATABASE_URL = os.getenv(
     "DATABASE_URL", 
-    "postgresql://postgres:YourSecurePassword123!@blood-donor-db.cfu6ig0486fv.eu-west-3.rds.amazonaws.com:5432/postgres"
+    "postgresql://postgres:YriFkwdSDCFRreklJsMUZnXjJKJVusff@postgres.railway.internal:5432/railway"
 )
 
 # Create FastAPI app

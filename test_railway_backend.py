@@ -6,7 +6,7 @@ import requests
 import json
 
 # Replace with your actual Railway URL
-RAILWAY_URL = "https://your-app-name.railway.app"  # Replace this!
+RAILWAY_URL = "https://blood-donor-app-production-aa1d.up.railway.app"
 
 def test_health():
     """Test health endpoint"""
