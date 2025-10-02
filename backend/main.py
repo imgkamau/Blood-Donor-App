@@ -89,19 +89,25 @@ manager = ConnectionManager()
 def init_database():
     """Initialize database schema if it doesn't exist"""
     try:
+        print("🔍 Checking database connection and schema...")
         with engine.connect() as conn:
-            # Create schema and table if they don't exist
+            # Check current database
+            result = conn.execute(text("SELECT current_database()"))
+            db_name = result.fetchone()[0]
+            print(f"✅ Connected to database: {db_name}")
+            
+            # Create extension first
+            conn.execute(text("CREATE EXTENSION IF NOT EXISTS \"uuid-ossp\""))
+            conn.commit()
+            print("✅ Extension uuid-ossp created")
+            
+            # Create schema
+            conn.execute(text("CREATE SCHEMA IF NOT EXISTS donate"))
+            conn.commit()
+            print("✅ Schema 'donate' created")
+            
+            # Create table
             conn.execute(text("""
-                -- Ensure the uuid-ossp extension is available
-                CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
-                
-                -- Create the donate schema if it doesn't exist
-                CREATE SCHEMA IF NOT EXISTS donate;
-                
-                -- Set the search path
-                SET search_path TO donate, public;
-                
-                -- Create the blood table if it doesn't exist
                 CREATE TABLE IF NOT EXISTS donate.blood (
                     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
                     donor_id UUID,
@@ -118,16 +124,29 @@ def init_database():
                     last_donation_date DATE,
                     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
                     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                );
-                
-                -- Create indexes for better performance
-                CREATE INDEX IF NOT EXISTS idx_blood_blood_type ON donate.blood (blood_type);
-                CREATE INDEX IF NOT EXISTS idx_blood_latitude ON donate.blood (latitude);
-                CREATE INDEX IF NOT EXISTS idx_blood_longitude ON donate.blood (longitude);
-                CREATE INDEX IF NOT EXISTS idx_blood_city ON donate.blood (city);
+                )
             """))
             conn.commit()
-            print("✅ Database schema initialized successfully")
+            print("✅ Table 'donate.blood' created")
+            
+            # Create indexes
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_blood_type ON donate.blood (blood_type)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_latitude ON donate.blood (latitude)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_longitude ON donate.blood (longitude)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_city ON donate.blood (city)"))
+            conn.commit()
+            print("✅ Indexes created")
+            
+            # Verify table exists
+            result = conn.execute(text("""
+                SELECT table_name FROM information_schema.tables 
+                WHERE table_schema = 'donate' AND table_name = 'blood'
+            """))
+            if result.fetchone():
+                print("✅ Database schema initialized successfully - Table verified!")
+            else:
+                print("⚠️  Table was created but not found in schema")
+                
     except Exception as e:
         print(f"⚠️  Warning: Could not initialize database schema: {e}")
         print("   The app will still work, but database operations may fail")
