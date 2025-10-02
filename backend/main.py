@@ -101,14 +101,9 @@ def init_database():
             conn.commit()
             print("✅ Extension uuid-ossp created")
             
-            # Create schema
-            conn.execute(text("CREATE SCHEMA IF NOT EXISTS donate"))
-            conn.commit()
-            print("✅ Schema 'donate' created")
-            
-            # Create table
+            # Create table in public schema (for Railway UI visibility)
             conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS donate.blood (
+                CREATE TABLE IF NOT EXISTS public.blood (
                     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
                     donor_id UUID,
                     first_name VARCHAR(100) NOT NULL,
@@ -127,20 +122,20 @@ def init_database():
                 )
             """))
             conn.commit()
-            print("✅ Table 'donate.blood' created")
+            print("✅ Table 'public.blood' created")
             
             # Create indexes
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_blood_type ON donate.blood (blood_type)"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_latitude ON donate.blood (latitude)"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_longitude ON donate.blood (longitude)"))
-            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_city ON donate.blood (city)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_blood_type ON public.blood (blood_type)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_latitude ON public.blood (latitude)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_longitude ON public.blood (longitude)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_city ON public.blood (city)"))
             conn.commit()
             print("✅ Indexes created")
             
             # Verify table exists
             result = conn.execute(text("""
                 SELECT table_name FROM information_schema.tables 
-                WHERE table_schema = 'donate' AND table_name = 'blood'
+                WHERE table_schema = 'public' AND table_name = 'blood'
             """))
             if result.fetchone():
                 print("✅ Database schema initialized successfully - Table verified!")
@@ -256,7 +251,7 @@ async def create_donor(donor: DonorCreate, db = Depends(get_db)):
     try:
         # Insert donor into database
         query = text("""
-            INSERT INTO donate.blood (
+            INSERT INTO public.blood (
                 first_name, phone_number, blood_type, latitude, longitude,
                 address, city, country, is_verified, is_available
             ) VALUES (
@@ -326,7 +321,7 @@ async def get_all_donors(db = Depends(get_db)):
         query = text("""
             SELECT id, first_name, phone_number, blood_type, latitude, longitude,
                    address, city, country, is_verified, is_available, created_at
-            FROM donate.blood
+            FROM public.blood
             WHERE is_available = true
             ORDER BY created_at DESC
         """)
@@ -371,7 +366,7 @@ async def search_donors(search_request: DonorSearchRequest, db = Depends(get_db)
                     b.is_verified,
                     donate.calculate_distance_km(:latitude, :longitude, b.latitude, b.longitude) AS distance_km
                 FROM
-                    donate.blood AS b
+                    public.blood AS b
                 WHERE
                     b.is_available = TRUE
                     AND b.is_verified = TRUE
@@ -439,7 +434,7 @@ async def get_donor(donor_id: str, db = Depends(get_db)):
         query = text("""
             SELECT id, first_name, phone_number, blood_type, latitude, longitude,
                    address, city, country, is_verified, is_available, created_at
-            FROM donate.blood
+            FROM public.blood
             WHERE id = :donor_id
         """)
         
@@ -474,7 +469,7 @@ async def update_donor(donor_id: str, donor: DonorCreate, db = Depends(get_db)):
     """Update a donor's information"""
     try:
         query = text("""
-            UPDATE donate.blood SET
+            UPDATE public.blood SET
                 first_name = :first_name,
                 phone_number = :phone_number,
                 blood_type = :blood_type,
@@ -537,7 +532,7 @@ async def update_donor(donor_id: str, donor: DonorCreate, db = Depends(get_db)):
 async def delete_donor(donor_id: str, db = Depends(get_db)):
     """Delete a donor"""
     try:
-        query = text("DELETE FROM donate.blood WHERE id = :donor_id")
+        query = text("DELETE FROM public.blood WHERE id = :donor_id")
         result = db.execute(query, {"donor_id": donor_id})
         
         if result.rowcount == 0:
