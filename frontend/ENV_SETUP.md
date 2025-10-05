@@ -6,10 +6,10 @@ When deploying to Vercel, add these environment variables in your project settin
 
 ### 1. DATABASE_URL
 ```
-postgresql://postgres:YriFkwdSDCFRreklJsMUZnXjJKJVusff@postgres.railway.internal:5432/railway
+postgresql://postgres:password@host:port/railway
 ```
 
-**Important:** For Vercel to access Railway's internal hostname, you need to use the **PUBLIC** connection string from Railway.
+**Important:** For Vercel to access Railway, you need to use the **PUBLIC** connection string from Railway (not the internal one).
 
 Get it from Railway:
 1. Go to your Railway project
