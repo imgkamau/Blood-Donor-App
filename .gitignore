@@ -167,6 +167,9 @@ parts/
 sdist/
 var/
 wheels/
+
+# Exception: Don't ignore frontend lib folder
+!frontend/lib/
 *.egg-info/
 .installed.cfg
 *.egg
