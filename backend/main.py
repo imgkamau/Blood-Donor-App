@@ -162,6 +162,29 @@ def init_database():
             conn.commit()
             print("✅ Indexes created")
             
+            # Create search_logs table for admin portal
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS public.search_logs (
+                    id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+                    blood_type VARCHAR(5) NOT NULL,
+                    latitude DECIMAL(10, 8) NOT NULL,
+                    longitude DECIMAL(11, 8) NOT NULL,
+                    radius_km DECIMAL(8, 2) NOT NULL,
+                    results_count INTEGER NOT NULL DEFAULT 0,
+                    client_ip VARCHAR(45),
+                    searched_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.commit()
+            print("✅ Table 'public.search_logs' created")
+            
+            # Create index on search_logs
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_search_logs_searched_at ON public.search_logs (searched_at DESC)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_search_logs_blood_type ON public.search_logs (blood_type)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_search_logs_client_ip ON public.search_logs (client_ip)"))
+            conn.commit()
+            print("✅ Search logs indexes created")
+            
             # Verify table exists
             result = conn.execute(text("""
                 SELECT table_name FROM information_schema.tables 
@@ -543,8 +566,32 @@ async def search_donors(search_request: DonorSearchRequest, request: Request, db
                 distance_km=float(row[6])
             ))
         
+        # Log the search activity (async, don't block response)
+        try:
+            log_query = text("""
+                INSERT INTO public.search_logs (
+                    blood_type, latitude, longitude, radius_km, results_count, client_ip
+                ) VALUES (
+                    :blood_type, :latitude, :longitude, :radius_km, :results_count, :client_ip
+                )
+            """)
+            db.execute(log_query, {
+                "blood_type": search_request.blood_type,
+                "latitude": search_request.latitude,
+                "longitude": search_request.longitude,
+                "radius_km": search_request.radius_km,
+                "results_count": len(donors),
+                "client_ip": client_id
+            })
+            db.commit()
+        except Exception as log_error:
+            # Don't fail the request if logging fails
+            print(f"Warning: Failed to log search activity: {log_error}")
+        
         return donors
         
+    except HTTPException:
+        raise
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error searching donors: {str(e)}")
 
