@@ -3,7 +3,7 @@ description: A Flutter app connecting blood recipients with nearby donors in Ken
 
 publish_to: 'none'
 
-version: 1.0.2+4
+version: 1.0.3+5
 
 environment:
   sdk: '>=3.0.0 <4.0.0'
