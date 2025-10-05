@@ -306,41 +306,62 @@ async def websocket_endpoint(websocket: WebSocket):
 async def create_donor(donor: DonorCreate, db = Depends(get_db)):
     """Create a new blood donor or update existing one if phone number already exists"""
     try:
-        # Use INSERT ... ON CONFLICT to handle duplicate phone numbers
-        query = text("""
-            INSERT INTO public.blood (
-                first_name, phone_number, blood_type, latitude, longitude,
-                address, city, country, is_verified, is_available
-            ) VALUES (
-                :first_name, :phone_number, :blood_type, :latitude, :longitude,
-                :address, :city, :country, :is_verified, :is_available
-            )
-            ON CONFLICT (phone_number) 
-            DO UPDATE SET
-                first_name = EXCLUDED.first_name,
-                blood_type = EXCLUDED.blood_type,
-                latitude = EXCLUDED.latitude,
-                longitude = EXCLUDED.longitude,
-                address = EXCLUDED.address,
-                city = EXCLUDED.city,
-                country = EXCLUDED.country,
-                is_available = EXCLUDED.is_available,
-                updated_at = CURRENT_TIMESTAMP
-            RETURNING id, created_at
+        # First check if phone number exists
+        check_query = text("""
+            SELECT id, created_at FROM public.blood WHERE phone_number = :phone_number
         """)
+        existing = db.execute(check_query, {"phone_number": donor.phone_number}).fetchone()
         
-        result = db.execute(query, {
-            "first_name": donor.first_name,
-            "phone_number": donor.phone_number,
-            "blood_type": donor.blood_type,
-            "latitude": donor.latitude,
-            "longitude": donor.longitude,
-            "address": donor.address,
-            "city": donor.city,
-            "country": donor.country,
-            "is_verified": donor.is_verified,
-            "is_available": donor.is_available
-        })
+        if existing:
+            # Update existing donor
+            update_query = text("""
+                UPDATE public.blood SET
+                    first_name = :first_name,
+                    blood_type = :blood_type,
+                    latitude = :latitude,
+                    longitude = :longitude,
+                    address = :address,
+                    city = :city,
+                    country = :country,
+                    is_available = :is_available,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE phone_number = :phone_number
+                RETURNING id, created_at
+            """)
+            result = db.execute(update_query, {
+                "first_name": donor.first_name,
+                "phone_number": donor.phone_number,
+                "blood_type": donor.blood_type,
+                "latitude": donor.latitude,
+                "longitude": donor.longitude,
+                "address": donor.address,
+                "city": donor.city,
+                "country": donor.country,
+                "is_available": donor.is_available
+            })
+        else:
+            # Insert new donor
+            insert_query = text("""
+                INSERT INTO public.blood (
+                    first_name, phone_number, blood_type, latitude, longitude,
+                    address, city, country, is_verified, is_available
+                ) VALUES (
+                    :first_name, :phone_number, :blood_type, :latitude, :longitude,
+                    :address, :city, :country, :is_verified, :is_available
+                ) RETURNING id, created_at
+            """)
+            result = db.execute(insert_query, {
+                "first_name": donor.first_name,
+                "phone_number": donor.phone_number,
+                "blood_type": donor.blood_type,
+                "latitude": donor.latitude,
+                "longitude": donor.longitude,
+                "address": donor.address,
+                "city": donor.city,
+                "country": donor.country,
+                "is_verified": donor.is_verified,
+                "is_available": donor.is_available
+            })
         
         row = result.fetchone()
         donor_id = row[0]
