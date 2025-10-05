@@ -20,25 +20,36 @@ export default function AdminLogin() {
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
-    console.log("[v0] Login attempt with password:", password)
     setLoading(true)
     setError("")
 
-    // Simple password check (in production, use proper auth)
-    if (password === "admin123") {
-      console.log("[v0] Password correct, setting cookie and redirecting")
-      
-      // Set cookie via document.cookie (client-side)
-      document.cookie = "admin_session=true; path=/; max-age=86400; SameSite=Lax"
-      
-      // Small delay to ensure cookie is set
-      setTimeout(() => {
-        router.push("/admin/dashboard")
-        router.refresh() // Force a refresh to reload server component with new cookie
-      }, 100)
-    } else {
-      console.log("[v0] Password incorrect")
-      setError("Invalid password")
+    try {
+      // Verify password via API endpoint
+      const response = await fetch('/api/admin/verify-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ password }),
+      })
+
+      const data = await response.json()
+
+      if (response.ok && data.valid) {
+        // Set cookie via document.cookie (client-side)
+        document.cookie = "admin_session=true; path=/; max-age=86400; SameSite=Lax"
+        
+        // Small delay to ensure cookie is set
+        setTimeout(() => {
+          router.push("/admin/dashboard")
+          router.refresh()
+        }, 100)
+      } else {
+        setError("Invalid password")
+        setLoading(false)
+      }
+    } catch (error) {
+      setError("An error occurred. Please try again.")
       setLoading(false)
     }
   }
@@ -63,7 +74,6 @@ export default function AdminLogin() {
                 required
               />
               {error && <p className="text-sm text-destructive">{error}</p>}
-              <p className="text-xs text-muted-foreground">Demo password: admin123</p>
             </div>
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? "Logging in..." : "Login"}
