@@ -132,19 +132,23 @@ def init_database():
             print("✅ Table 'public.blood' created")
             
             # Add unique constraint to phone_number if table already exists
-            conn.execute(text("""
-                DO $$ 
-                BEGIN
-                    IF NOT EXISTS (
-                        SELECT 1 FROM pg_constraint 
-                        WHERE conname = 'blood_phone_number_key'
-                    ) THEN
-                        ALTER TABLE public.blood ADD CONSTRAINT blood_phone_number_key UNIQUE (phone_number);
-                    END IF;
-                END $$;
-            """))
-            conn.commit()
-            print("✅ Unique constraint on phone_number ensured")
+            try:
+                conn.execute(text("""
+                    DO $$ 
+                    BEGIN
+                        IF NOT EXISTS (
+                            SELECT 1 FROM pg_constraint 
+                            WHERE conname = 'blood_phone_number_key'
+                        ) THEN
+                            ALTER TABLE public.blood ADD CONSTRAINT blood_phone_number_key UNIQUE (phone_number);
+                        END IF;
+                    END $$;
+                """))
+                conn.commit()
+                print("✅ Unique constraint on phone_number ensured")
+            except Exception as constraint_error:
+                print(f"⚠️  Could not create unique constraint (likely duplicate phone numbers exist): {constraint_error}")
+                conn.rollback()  # Rollback and continue with other setup
             
             # Create indexes for better query performance
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_blood_type ON public.blood (blood_type)"))
