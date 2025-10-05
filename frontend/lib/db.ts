@@ -7,22 +7,36 @@ function getPool() {
   if (!pool) {
     const databaseUrl = process.env.DATABASE_URL
     if (!databaseUrl) {
-      throw new Error("DATABASE_URL environment variable is not set")
+      throw new Error("DATABASE_URL environment variable is not set. Please add it in Vercel Environment Variables.")
     }
     pool = new Pool({
       connectionString: databaseUrl,
       ssl: {
         rejectUnauthorized: false
-      }
+      },
+      // Serverless-friendly settings
+      max: 20, // Maximum connections in pool
+      idleTimeoutMillis: 30000, // Close idle connections after 30s
+      connectionTimeoutMillis: 10000, // 10s connection timeout
+    })
+    
+    // Handle connection errors
+    pool.on('error', (err) => {
+      console.error('Unexpected database pool error:', err)
     })
   }
   return pool
 }
 
 async function query(text: string, params?: any[]) {
-  const pool = getPool()
-  const result = await pool.query(text, params)
-  return result.rows
+  try {
+    const pool = getPool()
+    const result = await pool.query(text, params)
+    return result.rows
+  } catch (error) {
+    console.error('Database query error:', error)
+    throw error
+  }
 }
 
 // Helper function to get donor statistics
