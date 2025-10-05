@@ -354,9 +354,18 @@ async def get_all_donors(db = Depends(get_db)):
 async def search_donors(search_request: DonorSearchRequest, db = Depends(get_db)):
     """Search for donors by blood type and location"""
     try:
+        # Haversine formula for distance calculation in PostgreSQL
+        distance_formula = """
+            6371 * acos(
+                cos(radians(:latitude)) * cos(radians(b.latitude)) * 
+                cos(radians(b.longitude) - radians(:longitude)) + 
+                sin(radians(:latitude)) * sin(radians(b.latitude))
+            )
+        """
+        
         # If blood_type is "ANY", search for all blood types
         if search_request.blood_type.upper() == "ANY":
-            query = text("""
+            query = text(f"""
                 SELECT
                     b.id,
                     b.first_name,
@@ -364,13 +373,13 @@ async def search_donors(search_request: DonorSearchRequest, db = Depends(get_db)
                     b.blood_type,
                     b.city,
                     b.is_verified,
-                    donate.calculate_distance_km(:latitude, :longitude, b.latitude, b.longitude) AS distance_km
+                    {distance_formula} AS distance_km
                 FROM
                     public.blood AS b
                 WHERE
                     b.is_available = TRUE
                     AND b.is_verified = TRUE
-                    AND donate.calculate_distance_km(:latitude, :longitude, b.latitude, b.longitude) <= :radius_km
+                    AND {distance_formula} <= :radius_km
                 ORDER BY
                     distance_km
                 LIMIT 20
@@ -383,10 +392,25 @@ async def search_donors(search_request: DonorSearchRequest, db = Depends(get_db)
             })
         else:
             # Search for specific blood type
-            query = text("""
-                SELECT * FROM donate.search_donors(
-                    :blood_type, :latitude, :longitude, :radius_km
-                )
+            query = text(f"""
+                SELECT
+                    b.id,
+                    b.first_name,
+                    b.phone_number,
+                    b.blood_type,
+                    b.city,
+                    b.is_verified,
+                    {distance_formula} AS distance_km
+                FROM
+                    public.blood AS b
+                WHERE
+                    b.blood_type = :blood_type
+                    AND b.is_available = TRUE
+                    AND b.is_verified = TRUE
+                    AND {distance_formula} <= :radius_km
+                ORDER BY
+                    distance_km
+                LIMIT 20
             """)
             
             result = db.execute(query, {
