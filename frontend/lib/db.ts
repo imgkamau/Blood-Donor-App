@@ -41,55 +41,22 @@ async function query(text: string, params?: any[]) {
 
 // Helper function to get donor statistics
 export async function getDonorStats() {
-  const totalDonorsResult = await query('SELECT COUNT(*) as count FROM public.blood')
-  const totalDonors = totalDonorsResult[0]
-
-  const donorsByBloodType = await query(`
-    SELECT blood_type, COUNT(*) as count 
-    FROM public.blood 
-    GROUP BY blood_type 
-    ORDER BY blood_type
-  `)
-
-  const recentDonors = await query(`
-    SELECT id, first_name, blood_type, city, latitude, longitude, created_at
-    FROM public.blood 
-    ORDER BY created_at DESC 
-    LIMIT 5
-  `)
-
-  const searchCountResult = await query('SELECT COUNT(*) as count FROM public.search_logs')
-  const searchCount = searchCountResult[0]
-
-  const todayRegistrationsResult = await query(`
-    SELECT COUNT(*) as count 
-    FROM public.blood 
-    WHERE created_at >= CURRENT_DATE
-  `)
-  const todayRegistrations = todayRegistrationsResult[0]
-
-  const topCities = await query(`
-    SELECT city, COUNT(*) as count 
-    FROM public.blood 
-    WHERE city IS NOT NULL
-    GROUP BY city 
-    ORDER BY count DESC 
-    LIMIT 5
-  `)
-
-  return {
-    totalDonors: Number(totalDonors.count),
-    donorsByBloodType,
-    recentDonors: recentDonors.map((donor: any) => ({
-      id: donor.id,
-      first_name: donor.first_name,
-      blood_type: donor.blood_type,
-      location: donor.city || `${donor.latitude}, ${donor.longitude}`,
-      created_at: donor.created_at
-    })),
-    searchCount: Number(searchCount?.count || 0),
-    todayRegistrations: Number(todayRegistrations.count),
-    topCities,
+  // Use Railway backend API instead of direct database connection
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://blood-donor-app-production-aa1d.up.railway.app'
+  
+  try {
+    const response = await fetch(`${apiUrl}/api/v1/admin/stats`, {
+      cache: 'no-store' // Disable caching for fresh data
+    })
+    
+    if (!response.ok) {
+      throw new Error(`API returned ${response.status}`)
+    }
+    
+    return await response.json()
+  } catch (error) {
+    console.error('Error fetching donor stats from API:', error)
+    throw error
   }
 }
 
@@ -98,38 +65,26 @@ export async function getDonors(filters?: {
   search?: string
   bloodType?: string
 }) {
-  let queryText = `
-    SELECT id, first_name, phone_number, blood_type, city, latitude, longitude, 
-           is_verified, is_available, created_at 
-    FROM public.blood 
-    WHERE 1=1
-  `
-  const params: any[] = []
-
-  if (filters?.search) {
-    queryText += ` AND (first_name ILIKE $${params.length + 1} OR phone_number ILIKE $${params.length + 1} OR city ILIKE $${params.length + 1})`
-    params.push(`%${filters.search}%`)
-  }
-
-  if (filters?.bloodType && filters.bloodType !== "all") {
-    queryText += ` AND blood_type = $${params.length + 1}`
-    params.push(filters.bloodType)
-  }
-
-  queryText += " ORDER BY created_at DESC"
-
-  const results = await query(queryText, params)
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://blood-donor-app-production-aa1d.up.railway.app'
   
-  return results.map((donor: any) => ({
-    id: donor.id,
-    first_name: donor.first_name,
-    phone: donor.phone_number,
-    blood_type: donor.blood_type,
-    location: donor.city || `${donor.latitude}, ${donor.longitude}`,
-    is_verified: donor.is_verified,
-    is_available: donor.is_available,
-    created_at: donor.created_at
-  }))
+  const params = new URLSearchParams()
+  if (filters?.search) params.append('search', filters.search)
+  if (filters?.bloodType) params.append('blood_type', filters.bloodType)
+  
+  try {
+    const response = await fetch(`${apiUrl}/api/v1/admin/donors?${params.toString()}`, {
+      cache: 'no-store'
+    })
+    
+    if (!response.ok) {
+      throw new Error(`API returned ${response.status}`)
+    }
+    
+    return await response.json()
+  } catch (error) {
+    console.error('Error fetching donors from API:', error)
+    throw error
+  }
 }
 
 // Helper function to get search activity
@@ -138,36 +93,25 @@ export async function getSearchActivity(filters?: {
   dateFrom?: string
   dateTo?: string
 }) {
-  let queryText = `
-    SELECT id, blood_type, latitude, longitude, radius_km, 
-           results_count, client_ip, searched_at 
-    FROM public.search_logs 
-    WHERE 1=1
-  `
-  const params: any[] = []
-
-  if (filters?.bloodType && filters.bloodType !== "all") {
-    queryText += ` AND blood_type = $${params.length + 1}`
-    params.push(filters.bloodType)
-  }
-
-  if (filters?.dateFrom) {
-    queryText += ` AND searched_at >= $${params.length + 1}`
-    params.push(filters.dateFrom)
-  }
-
-  if (filters?.dateTo) {
-    queryText += ` AND searched_at <= $${params.length + 1}`
-    params.push(filters.dateTo)
-  }
-
-  queryText += " ORDER BY searched_at DESC LIMIT 100"
-
+  const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'https://blood-donor-app-production-aa1d.up.railway.app'
+  
+  const params = new URLSearchParams()
+  if (filters?.bloodType) params.append('blood_type', filters.bloodType)
+  if (filters?.dateFrom) params.append('date_from', filters.dateFrom)
+  if (filters?.dateTo) params.append('date_to', filters.dateTo)
+  
   try {
-    return await query(queryText, params)
+    const response = await fetch(`${apiUrl}/api/v1/admin/search-activity?${params.toString()}`, {
+      cache: 'no-store'
+    })
+    
+    if (!response.ok) {
+      throw new Error(`API returned ${response.status}`)
+    }
+    
+    return await response.json()
   } catch (error) {
-    // If table doesn't exist yet, return empty array
-    console.error("Error fetching search activity:", error)
+    console.error('Error fetching search activity from API:', error)
     return []
   }
 }

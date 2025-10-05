@@ -716,6 +716,174 @@ async def delete_donor(donor_id: str, db = Depends(get_db)):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error deleting donor: {str(e)}")
 
+# ============================================
+# ADMIN PORTAL ENDPOINTS
+# ============================================
+
+@app.get("/api/v1/admin/stats")
+async def get_admin_stats(db = Depends(get_db)):
+    """Get statistics for admin dashboard"""
+    try:
+        # Total donors
+        total_donors_result = db.execute(text("SELECT COUNT(*) as count FROM public.blood")).fetchone()
+        total_donors = total_donors_result[0]
+        
+        # Donors by blood type
+        donors_by_blood_type = db.execute(text("""
+            SELECT blood_type, COUNT(*) as count 
+            FROM public.blood 
+            GROUP BY blood_type 
+            ORDER BY blood_type
+        """)).fetchall()
+        
+        # Recent donors (last 5)
+        recent_donors = db.execute(text("""
+            SELECT id, first_name, blood_type, city, latitude, longitude, created_at
+            FROM public.blood 
+            ORDER BY created_at DESC 
+            LIMIT 5
+        """)).fetchall()
+        
+        # Total searches
+        search_count_result = db.execute(text("SELECT COUNT(*) as count FROM public.search_logs")).fetchone()
+        search_count = search_count_result[0] if search_count_result else 0
+        
+        # Today's registrations
+        today_registrations_result = db.execute(text("""
+            SELECT COUNT(*) as count 
+            FROM public.blood 
+            WHERE created_at >= CURRENT_DATE
+        """)).fetchone()
+        today_registrations = today_registrations_result[0]
+        
+        # Top cities
+        top_cities = db.execute(text("""
+            SELECT city, COUNT(*) as count 
+            FROM public.blood 
+            WHERE city IS NOT NULL
+            GROUP BY city 
+            ORDER BY count DESC 
+            LIMIT 5
+        """)).fetchall()
+        
+        return {
+            "totalDonors": total_donors,
+            "donorsByBloodType": [{"blood_type": row[0], "count": row[1]} for row in donors_by_blood_type],
+            "recentDonors": [
+                {
+                    "id": str(row[0]),
+                    "first_name": row[1],
+                    "blood_type": row[2],
+                    "location": row[3] or f"{row[4]}, {row[5]}",
+                    "created_at": row[6].isoformat()
+                } for row in recent_donors
+            ],
+            "searchCount": search_count,
+            "todayRegistrations": today_registrations,
+            "topCities": [{"city": row[0], "count": row[1]} for row in top_cities]
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching admin stats: {str(e)}")
+
+
+@app.get("/api/v1/admin/donors")
+async def get_all_donors(
+    search: Optional[str] = None,
+    blood_type: Optional[str] = None,
+    db = Depends(get_db)
+):
+    """Get all donors with optional filters"""
+    try:
+        query_text = """
+            SELECT id, first_name, phone_number, blood_type, city, latitude, longitude,
+                   is_verified, is_available, created_at 
+            FROM public.blood 
+            WHERE 1=1
+        """
+        params = {}
+        
+        if search:
+            query_text += """ AND (
+                first_name ILIKE :search 
+                OR phone_number ILIKE :search 
+                OR city ILIKE :search
+            )"""
+            params["search"] = f"%{search}%"
+        
+        if blood_type and blood_type != "all":
+            query_text += " AND blood_type = :blood_type"
+            params["blood_type"] = blood_type
+        
+        query_text += " ORDER BY created_at DESC"
+        
+        results = db.execute(text(query_text), params).fetchall()
+        
+        return [
+            {
+                "id": str(row[0]),
+                "first_name": row[1],
+                "phone": row[2],
+                "blood_type": row[3],
+                "location": row[4] or f"{row[5]}, {row[6]}",
+                "is_verified": row[7],
+                "is_available": row[8],
+                "created_at": row[9].isoformat()
+            } for row in results
+        ]
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching donors: {str(e)}")
+
+
+@app.get("/api/v1/admin/search-activity")
+async def get_search_activity(
+    blood_type: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    db = Depends(get_db)
+):
+    """Get search activity logs"""
+    try:
+        query_text = """
+            SELECT id, blood_type, latitude, longitude, radius_km,
+                   results_count, client_ip, searched_at 
+            FROM public.search_logs 
+            WHERE 1=1
+        """
+        params = {}
+        
+        if blood_type and blood_type != "all":
+            query_text += " AND blood_type = :blood_type"
+            params["blood_type"] = blood_type
+        
+        if date_from:
+            query_text += " AND searched_at >= :date_from"
+            params["date_from"] = date_from
+        
+        if date_to:
+            query_text += " AND searched_at <= :date_to"
+            params["date_to"] = date_to
+        
+        query_text += " ORDER BY searched_at DESC LIMIT 100"
+        
+        results = db.execute(text(query_text), params).fetchall()
+        
+        return [
+            {
+                "id": str(row[0]),
+                "blood_type": row[1],
+                "latitude": float(row[2]),
+                "longitude": float(row[3]),
+                "radius_km": float(row[4]),
+                "results_count": row[5],
+                "client_ip": row[6],
+                "searched_at": row[7].isoformat()
+            } for row in results
+        ]
+    except Exception as e:
+        # If table doesn't exist yet, return empty array
+        return []
+
+
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
