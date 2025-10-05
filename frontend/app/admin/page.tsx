@@ -26,15 +26,21 @@ export default function AdminLogin() {
 
     // Simple password check (in production, use proper auth)
     if (password === "admin123") {
-      console.log("[v0] Password correct, redirecting to dashboard")
-      // Store auth in sessionStorage
-      sessionStorage.setItem("adminAuth", "true")
-      router.push("/admin/dashboard")
+      console.log("[v0] Password correct, setting cookie and redirecting")
+      
+      // Set cookie via document.cookie (client-side)
+      document.cookie = "admin_session=true; path=/; max-age=86400; SameSite=Lax"
+      
+      // Small delay to ensure cookie is set
+      setTimeout(() => {
+        router.push("/admin/dashboard")
+        router.refresh() // Force a refresh to reload server component with new cookie
+      }, 100)
     } else {
       console.log("[v0] Password incorrect")
       setError("Invalid password")
+      setLoading(false)
     }
-    setLoading(false)
   }
 
   return (
