@@ -378,7 +378,6 @@ async def search_donors(search_request: DonorSearchRequest, db = Depends(get_db)
                     public.blood AS b
                 WHERE
                     b.is_available = TRUE
-                    AND b.is_verified = TRUE
                     AND {distance_formula} <= :radius_km
                 ORDER BY
                     distance_km
@@ -406,7 +405,6 @@ async def search_donors(search_request: DonorSearchRequest, db = Depends(get_db)
                 WHERE
                     b.blood_type = :blood_type
                     AND b.is_available = TRUE
-                    AND b.is_verified = TRUE
                     AND {distance_formula} <= :radius_km
                 ORDER BY
                     distance_km
