@@ -724,9 +724,12 @@ async def delete_donor(donor_id: str, db = Depends(get_db)):
 async def get_admin_stats(db = Depends(get_db)):
     """Get statistics for admin dashboard"""
     try:
+        print("📊 Fetching admin stats...")
+        
         # Total donors
         total_donors_result = db.execute(text("SELECT COUNT(*) as count FROM public.blood")).fetchone()
         total_donors = total_donors_result[0]
+        print(f"✅ Total donors: {total_donors}")
         
         # Donors by blood type
         donors_by_blood_type = db.execute(text("""
@@ -735,6 +738,7 @@ async def get_admin_stats(db = Depends(get_db)):
             GROUP BY blood_type 
             ORDER BY blood_type
         """)).fetchall()
+        print(f"✅ Donors by blood type: {len(donors_by_blood_type)} types")
         
         # Recent donors (last 5)
         recent_donors = db.execute(text("""
@@ -743,10 +747,16 @@ async def get_admin_stats(db = Depends(get_db)):
             ORDER BY created_at DESC 
             LIMIT 5
         """)).fetchall()
+        print(f"✅ Recent donors: {len(recent_donors)} donors")
         
-        # Total searches
-        search_count_result = db.execute(text("SELECT COUNT(*) as count FROM public.search_logs")).fetchone()
-        search_count = search_count_result[0] if search_count_result else 0
+        # Total searches - handle table not existing
+        try:
+            search_count_result = db.execute(text("SELECT COUNT(*) as count FROM public.search_logs")).fetchone()
+            search_count = search_count_result[0] if search_count_result else 0
+            print(f"✅ Search count: {search_count}")
+        except Exception as search_error:
+            print(f"⚠️ Search logs table doesn't exist yet: {search_error}")
+            search_count = 0
         
         # Today's registrations
         today_registrations_result = db.execute(text("""
@@ -755,6 +765,7 @@ async def get_admin_stats(db = Depends(get_db)):
             WHERE created_at >= CURRENT_DATE
         """)).fetchone()
         today_registrations = today_registrations_result[0]
+        print(f"✅ Today's registrations: {today_registrations}")
         
         # Top cities
         top_cities = db.execute(text("""
@@ -765,8 +776,9 @@ async def get_admin_stats(db = Depends(get_db)):
             ORDER BY count DESC 
             LIMIT 5
         """)).fetchall()
+        print(f"✅ Top cities: {len(top_cities)} cities")
         
-        return {
+        result = {
             "totalDonors": total_donors,
             "donorsByBloodType": [{"blood_type": row[0], "count": row[1]} for row in donors_by_blood_type],
             "recentDonors": [
@@ -782,7 +794,15 @@ async def get_admin_stats(db = Depends(get_db)):
             "todayRegistrations": today_registrations,
             "topCities": [{"city": row[0], "count": row[1]} for row in top_cities]
         }
+        
+        print("✅ Admin stats fetched successfully")
+        return result
+        
     except Exception as e:
+        print(f"❌ Error fetching admin stats: {str(e)}")
+        print(f"   Error type: {type(e).__name__}")
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=f"Error fetching admin stats: {str(e)}")
 
 
