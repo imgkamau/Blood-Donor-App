@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Depends, WebSocket, WebSocketDisconnect, Request
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
@@ -7,10 +7,17 @@ from typing import List, Optional, Dict
 import os
 import json
 import asyncio
+from datetime import datetime, timedelta
+from collections import defaultdict
 from dotenv import load_dotenv
 
 # Load environment variables
 load_dotenv()
+
+# Rate limiting storage (in-memory for simplicity)
+# In production, use Redis or a database
+search_rate_limit = defaultdict(list)
+MAX_SEARCHES_PER_HOUR = 5
 
 # Database configuration
 DATABASE_URL = os.getenv(
@@ -107,7 +114,7 @@ def init_database():
                     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
                     donor_id UUID,
                     first_name VARCHAR(100) NOT NULL,
-                    phone_number VARCHAR(20) NOT NULL,
+                    phone_number VARCHAR(20) NOT NULL UNIQUE,
                     blood_type VARCHAR(5) NOT NULL CHECK (blood_type IN ('A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-')),
                     latitude DECIMAL(10, 8) NOT NULL,
                     longitude DECIMAL(11, 8) NOT NULL,
@@ -124,11 +131,34 @@ def init_database():
             conn.commit()
             print("✅ Table 'public.blood' created")
             
-            # Create indexes
+            # Add unique constraint to phone_number if table already exists
+            conn.execute(text("""
+                DO $$ 
+                BEGIN
+                    IF NOT EXISTS (
+                        SELECT 1 FROM pg_constraint 
+                        WHERE conname = 'blood_phone_number_key'
+                    ) THEN
+                        ALTER TABLE public.blood ADD CONSTRAINT blood_phone_number_key UNIQUE (phone_number);
+                    END IF;
+                END $$;
+            """))
+            conn.commit()
+            print("✅ Unique constraint on phone_number ensured")
+            
+            # Create indexes for better query performance
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_blood_type ON public.blood (blood_type)"))
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_is_available ON public.blood (is_available)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_latitude ON public.blood (latitude)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_longitude ON public.blood (longitude)"))
             conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_city ON public.blood (city)"))
+            
+            # Composite index for common search queries (blood_type + is_available)
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_search ON public.blood (blood_type, is_available) WHERE is_available = TRUE"))
+            
+            # Spatial index for efficient location-based queries
+            conn.execute(text("CREATE INDEX IF NOT EXISTS idx_blood_location ON public.blood (latitude, longitude)"))
+            
             conn.commit()
             print("✅ Indexes created")
             
@@ -189,6 +219,33 @@ class DonorSearchRequest(BaseModel):
     longitude: float
     radius_km: float = 50
 
+# Utility Functions
+def mask_phone_number(phone: str) -> str:
+    """Mask phone number for privacy: +254719***788"""
+    if not phone or len(phone) < 8:
+        return phone
+    # Show first 7 characters and last 3
+    return f"{phone[:7]}***{phone[-3:]}"
+
+def check_rate_limit(client_id: str) -> bool:
+    """Check if client has exceeded rate limit"""
+    now = datetime.now()
+    one_hour_ago = now - timedelta(hours=1)
+    
+    # Remove old entries
+    search_rate_limit[client_id] = [
+        timestamp for timestamp in search_rate_limit[client_id]
+        if timestamp > one_hour_ago
+    ]
+    
+    # Check if limit exceeded
+    if len(search_rate_limit[client_id]) >= MAX_SEARCHES_PER_HOUR:
+        return False
+    
+    # Add new search timestamp
+    search_rate_limit[client_id].append(now)
+    return True
+
 class DonorSearchResponse(BaseModel):
     id: str
     first_name: str
@@ -247,9 +304,9 @@ async def websocket_endpoint(websocket: WebSocket):
 
 @app.post("/api/v1/donors", response_model=DonorResponse)
 async def create_donor(donor: DonorCreate, db = Depends(get_db)):
-    """Create a new blood donor"""
+    """Create a new blood donor or update existing one if phone number already exists"""
     try:
-        # Insert donor into database
+        # Use INSERT ... ON CONFLICT to handle duplicate phone numbers
         query = text("""
             INSERT INTO public.blood (
                 first_name, phone_number, blood_type, latitude, longitude,
@@ -257,7 +314,19 @@ async def create_donor(donor: DonorCreate, db = Depends(get_db)):
             ) VALUES (
                 :first_name, :phone_number, :blood_type, :latitude, :longitude,
                 :address, :city, :country, :is_verified, :is_available
-            ) RETURNING id, created_at
+            )
+            ON CONFLICT (phone_number) 
+            DO UPDATE SET
+                first_name = EXCLUDED.first_name,
+                blood_type = EXCLUDED.blood_type,
+                latitude = EXCLUDED.latitude,
+                longitude = EXCLUDED.longitude,
+                address = EXCLUDED.address,
+                city = EXCLUDED.city,
+                country = EXCLUDED.country,
+                is_available = EXCLUDED.is_available,
+                updated_at = CURRENT_TIMESTAMP
+            RETURNING id, created_at
         """)
         
         result = db.execute(query, {
@@ -351,9 +420,28 @@ async def get_all_donors(db = Depends(get_db)):
         raise HTTPException(status_code=500, detail=f"Error fetching donors: {str(e)}")
 
 @app.post("/api/v1/donors/search", response_model=List[DonorSearchResponse])
-async def search_donors(search_request: DonorSearchRequest, db = Depends(get_db)):
-    """Search for donors by blood type and location"""
+async def search_donors(search_request: DonorSearchRequest, request: Request, db = Depends(get_db)):
+    """Search for donors by blood type and location with rate limiting and privacy protection"""
     try:
+        # Get client identifier (IP address or X-Forwarded-For header)
+        client_ip = request.client.host if request.client else "unknown"
+        forwarded_for = request.headers.get("X-Forwarded-For")
+        client_id = forwarded_for.split(",")[0] if forwarded_for else client_ip
+        
+        # Check rate limit
+        if not check_rate_limit(client_id):
+            raise HTTPException(
+                status_code=429, 
+                detail=f"Rate limit exceeded. Maximum {MAX_SEARCHES_PER_HOUR} searches per hour allowed."
+            )
+        
+        # Validate minimum search radius (prevent city-wide scraping)
+        if search_request.radius_km < 5:
+            raise HTTPException(
+                status_code=400,
+                detail="Minimum search radius is 5km"
+            )
+        
         # Haversine formula for distance calculation in PostgreSQL
         distance_formula = """
             6371 * acos(
@@ -363,7 +451,7 @@ async def search_donors(search_request: DonorSearchRequest, db = Depends(get_db)
             )
         """
         
-        # If blood_type is "ANY", search for all blood types
+        # If blood_type is "ANY", limit results more strictly
         if search_request.blood_type.upper() == "ANY":
             query = text(f"""
                 SELECT
@@ -381,7 +469,7 @@ async def search_donors(search_request: DonorSearchRequest, db = Depends(get_db)
                     AND {distance_formula} <= :radius_km
                 ORDER BY
                     distance_km
-                LIMIT 20
+                LIMIT 5
             """)
             
             result = db.execute(query, {
@@ -390,7 +478,7 @@ async def search_donors(search_request: DonorSearchRequest, db = Depends(get_db)
                 "radius_km": search_request.radius_km
             })
         else:
-            # Search for specific blood type
+            # Search for specific blood type (allow more results)
             query = text(f"""
                 SELECT
                     b.id,
@@ -408,7 +496,7 @@ async def search_donors(search_request: DonorSearchRequest, db = Depends(get_db)
                     AND {distance_formula} <= :radius_km
                 ORDER BY
                     distance_km
-                LIMIT 20
+                LIMIT 10
             """)
             
             result = db.execute(query, {
@@ -420,29 +508,19 @@ async def search_donors(search_request: DonorSearchRequest, db = Depends(get_db)
         
         donors = []
         for row in result:
-            # Handle both query formats (ANY search returns 7 columns, specific search returns 14)
-            if len(row) == 7:
-                # ANY search format
-                donors.append(DonorSearchResponse(
-                    id=str(row[0]),
-                    first_name=row[1],
-                    phone_number=row[2],
-                    blood_type=row[3],
-                    city=row[4],
-                    is_verified=row[5],
-                    distance_km=float(row[6])
-                ))
-            else:
-                # Specific search format (15 columns)
-                donors.append(DonorSearchResponse(
-                    id=str(row[0]),
-                    first_name=row[1],
-                    phone_number=row[2],
-                    blood_type=row[3],
-                    city=row[7],  # city is at index 7
-                    is_verified=row[9],  # is_verified is at index 9
-                    distance_km=float(row[14])  # distance_km is at index 14
-                ))
+            # Mask phone number for privacy
+            masked_phone = mask_phone_number(row[2])
+            
+            # All queries now return 7 columns
+            donors.append(DonorSearchResponse(
+                id=str(row[0]),
+                first_name=row[1],
+                phone_number=masked_phone,
+                blood_type=row[3],
+                city=row[4],
+                is_verified=row[5],
+                distance_km=float(row[6])
+            ))
         
         return donors
         
