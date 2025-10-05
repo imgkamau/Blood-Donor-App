@@ -756,6 +756,8 @@ async def get_admin_stats(db = Depends(get_db)):
             print(f"✅ Search count: {search_count}")
         except Exception as search_error:
             print(f"⚠️ Search logs table doesn't exist yet: {search_error}")
+            # Rollback the failed transaction to continue
+            db.rollback()
             search_count = 0
         
         # Today's registrations
